@@ -21,6 +21,7 @@ export class LLM {
   sess = undefined;
   profiler = false;
   feed = {};
+
   output_tokens = [];
   eos = 2;
   need_position_ids = true;
@@ -29,18 +30,15 @@ export class LLM {
   dtype = "float16";
   max_tokens = 9999;
 
-  async load(model, options = {}) {
-    // console.log("model:", model);
-    // console.log("options:", options); // 确认 options 包含 hasFP16
+  async load(model, options ) {
     const provider = options.provider || "webgpu";
+    // console.log("provider",provider);
     const verbose = options.verbose;
     const hasFP16 = (provider === "wasm") ? false : (options.hasFP16 !== undefined ? options.hasFP16 : true);
     this.profiler = options.profiler;
-    // console.log("hasFP16 with default value:", hasFP16); // 调试输出
 
-    // 设置 dtype，根据 hasFP16 参数
     this.dtype = hasFP16 ? 'float16' : 'float32';
-    console.log("this.dtype:", this.dtype); // 检查 dtype 设置
+   
 
     const model_path = "models";
     let model_file = "model_q4f16.onnx";
@@ -66,8 +64,10 @@ export class LLM {
     switch (provider) {
       case "webgpu":
         for (let i = 0; i < model_config.num_hidden_layers; ++i) {
-          opt.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
-          opt.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
+          // opt.preferredOutputLocation[`present.${i}.key`] = 'gpu-buffer';
+          // opt.preferredOutputLocation[`present.${i}.value`] = 'gpu-buffer';
+          opt.preferredOutputLocation[`present.${i}.key`] = 'cpu';
+          opt.preferredOutputLocation[`present.${i}.value`] = 'cpu';
         }
         break;
     }
@@ -92,37 +92,50 @@ export class LLM {
       
       ort.env.webgpu.profiling.mode = 'default';
     }
-    // console.log("model_config:", model_config);
+
     this.sess = await ort.InferenceSession.create(model_bytes, opt);
+    
     this.eos = model_config.eos_token_id;
     this.kv_dims = [1, model_config.num_key_value_heads, 0, model_config.hidden_size / model_config.num_attention_heads];
     this.dtype = hasFP16 ? "float16" : "float32";
-    // console.log("this.dtype after session create:", this.dtype);
 
     this.num_layers = model_config.num_hidden_layers;
-    this.initilize_feed();
+    this.initialize_feed();
   }
 
-  initilize_feed() {
-    const feed = this.feed;
+  initialize_feed() {
+    
 
-    // dispose of previous gpu buffers
-    for (const name in feed) {
-      const t = feed[name];
-      if (t.location === 'gpu-buffer') {
+
+    for (const name in this.feed) {
+      const t = this.feed[name];
+      if (t.location == 'gpu-buffer') {
+        // console.log("feed[name]:",t.location);
         t.dispose();
+      
       }
     }
-    this.feed = {};
-    // key value cache is zero copy, just pass gpu buffer as reference
+        // 重置 feed 对象
+        this.feed = {};
     const empty = this.dtype === "float16" ? new Uint16Array() : [];
     
     for (let i = 0; i < this.num_layers; ++i) {
       this.feed[`past_key_values.${i}.key`] = new ort.Tensor(this.dtype, empty, this.kv_dims);
       this.feed[`past_key_values.${i}.value`] = new ort.Tensor(this.dtype, empty, this.kv_dims);
     }
+   
+    // console.log("cleaned_feed:", this.feed);
     this.output_tokens = [];
   }
+
+
+
+
+
+
+
+
+
 
   argmax(t) {
     const arr = t.data;
@@ -143,38 +156,44 @@ export class LLM {
     return maxidx;
   }
 
+
+
+
+
+
+
+
   update_kv_cache(feed, outputs) {
     for (const name in outputs) {
       if (name.startsWith('present')) {
         let newName = name.replace('present', 'past_key_values');
-        // dispose previous gpu buffers
         const t = feed[newName];
         if (t.location === 'gpu-buffer') {
-          t.dispose();
+          t.dispose(); // 显式销毁旧的 GPU 缓冲区中的张量
+         
         }
-        feed[newName] = outputs[name];
+        feed[newName] = outputs[name]; // 更新 feed，赋值新的张量
       }
     }
   }
+  
 
   abort() {
     this.stop = true;
   }
-
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
   async generate(tokens, callback, options) {
     const max_tokens = options.max_tokens || 256;
     const feed = this.feed;
-
-    // console.log("Tokens before converting to BigInt:", tokens);
-    // 将 tokens 转换为 BigInt 数组
+    // console.log("input_feed:",feed);
     const input_ids = new ort.Tensor('int64', BigInt64Array.from(tokens.map(BigInt)), [1, tokens.length]);
-    // console.log("Converted input_ids to BigInt Tensor:", input_ids);
-
+  
     feed['input_ids'] = input_ids;
+    // console.log("3:",feed['input_ids']);
     this.stop = false;
 
     this.output_tokens.push(...input_ids.data);
-    // console.log("Initial output_tokens:", this.output_tokens);
 
     let last_token = 0n;
     let seqlen = this.output_tokens.length;
@@ -182,24 +201,23 @@ export class LLM {
 
     if (this.need_position_ids) {
       feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen - input_len + i)), [1, input_len]);
-    //   console.log("Position IDs Tensor:", feed['position_ids']);
+      // console.log("4:",feed['position_ids']);
     }
 
     while (last_token !== this.eos && last_token !== 32007n && seqlen < max_tokens && !this.stop) {
       try {
         seqlen = this.output_tokens.length;
+        // console.log("5:",seqlen);
         feed['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
-        // console.log("Attention Mask Tensor:", feed['attention_mask']);
-
-        // console.log("Running session with feed:", feed);
-        const outputs = await this.sess.run(feed);
-        // console.log("Outputs from session run:", outputs);
+       
+////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+        
+        const outputs = await this.sess.run(feed); // not registered
 
         last_token = BigInt(this.argmax(outputs.logits));
-        // console.log("Last token:", last_token);
 
         this.output_tokens.push(last_token);
-        // console.log("Updated output_tokens:", this.output_tokens);
 
         if (callback && !this.profiler) {
           callback(this.output_tokens);
@@ -208,25 +226,50 @@ export class LLM {
         this.update_kv_cache(feed, outputs);
 
         feed['input_ids'] = new ort.Tensor('int64', BigInt64Array.from([last_token]), [1, 1]);
-        // console.log("Next input_ids Tensor:", feed['input_ids']);
 
         if (this.need_position_ids) {
           feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from([BigInt(seqlen)]), [1, 1]);
-        //   console.log("Updated Position IDs Tensor:", feed['position_ids']);
         }
+
+
       } catch (error) {
         console.error("Error during session run:", error);
         throw error;
       }
     }
 
+
     if (this.profiler) {
       this.sess.endProfiling();
     }
 
-    // console.log("Final output_tokens:", this.output_tokens);
+
+     // 生成结束后清理所有的 GPU 缓冲区
+  await this.cleanup_buffers();
+   // 生成结束后清理所有的 feed 张量
+
+ 
+
     return this.output_tokens;
   }
+
+
+ 
+
+
+// 清理所有的 GPU 缓冲区
+async cleanup_buffers() {
+
+// console.log("end_feed:",this.feed);
+  for (const name in this.feed) {
+    const t = this.feed[name];
+    if (t.location === 'gpu-buffer') {
+      t.dispose();
+    }
+  }
+  this.feed = {};
+
+
 }
 
 
@@ -234,3 +277,130 @@ export class LLM {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+newupdate_kv_cache(feed, outputs) {
+  for (const name in outputs) {
+    if (name.startsWith('present')) {
+      let newName = name.replace('present', 'past_key_values');
+      
+     
+      feed[newName] = outputs[name]; // 更新 feed，赋值新的张量
+    }
+  }
+}
+
+
+
+
+  async newgenerate(tokens, callback, options) {
+    const max_tokens = options.max_tokens || 256;
+    const feed = this.feed;
+    console.log("input_feed:",feed);
+    const input_ids = new ort.Tensor('int64', BigInt64Array.from(tokens.map(BigInt)), [1, tokens.length]);
+  
+    feed['input_ids'] = input_ids;
+    // console.log("3:",feed['input_ids']);
+    this.stop = false;
+
+    this.output_tokens.push(...input_ids.data);
+
+    let last_token = 0n;
+    let seqlen = this.output_tokens.length;
+    const input_len = input_ids.size;
+
+    if (this.need_position_ids) {
+      feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen - input_len + i)), [1, input_len]);
+      // console.log("4:",feed['position_ids']);
+    }
+
+    while (last_token !== this.eos && last_token !== 32007n && seqlen < max_tokens && !this.stop) {
+      try {
+        seqlen = this.output_tokens.length;
+        // console.log("5:",seqlen);
+        feed['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
+       
+////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+        
+        const outputs = await this.sess.run(feed); // not registered
+
+        last_token = BigInt(this.argmax(outputs.logits));
+
+        this.output_tokens.push(last_token);
+
+        if (callback && !this.profiler) {
+          callback(this.output_tokens);
+        }
+
+        this.newupdate_kv_cache(feed, outputs);
+
+        feed['input_ids'] = new ort.Tensor('int64', BigInt64Array.from([last_token]), [1, 1]);
+
+        if (this.need_position_ids) {
+          feed['position_ids'] = new ort.Tensor('int64', BigInt64Array.from([BigInt(seqlen)]), [1, 1]);
+        }
+
+
+      } catch (error) {
+        console.error("Error during session run:", error);
+        throw error;
+      }
+    }
+
+
+    if (this.profiler) {
+      this.sess.endProfiling();
+    }
+
+
+     // 生成结束后清理所有的 GPU 缓冲区
+  await this.cleanup_buffers();
+   // 生成结束后清理所有的 feed 张量
+
+ 
+
+    return this.output_tokens;
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}

@@ -1,5 +1,16 @@
 
 
+
+
+
+
+
+
+
+
+
+
+
 import React, { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist/webpack';
 import Tesseract from 'tesseract.js';
@@ -34,7 +45,6 @@ const PdfParser = ({ onPdfParsed }) => {
       const textItems = textContentItems.items.map((item) => item.str).join(' ');
       textContent += textItems + '\n';
 
-      // Check for images
       const ops = await page.getOperatorList();
       for (let j = 0; j < ops.fnArray.length; j++) {
         if (ops.fnArray[j] === pdfjsLib.OPS.paintJpegXObject || ops.fnArray[j] === pdfjsLib.OPS.paintImageXObject) {
@@ -65,7 +75,6 @@ const PdfParser = ({ onPdfParsed }) => {
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (file) {
-      // Reset status and progress for new file upload
       setStatus('');
       setProgress(0);
 
@@ -134,18 +143,3 @@ PdfParser.propTypes = {
 };
 
 export default PdfParser;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

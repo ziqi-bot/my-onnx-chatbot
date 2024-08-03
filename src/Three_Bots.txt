@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AutoTokenizer } from '@xenova/transformers';
 import { LLM } from './llm';
-
 import { marked } from 'marked';
 import PdfParser from './PdfParser';
 import './App.css';
 
 const preCannedQueries = {
   "1": "Tell me about the lighthouse of Alexandria.",
-  "2": "Did the lighthouse of Alexandria exist at the same time the library of Alexandria existed?",
+  "2": "Did the lighthouse of Alexandria existed at the same time the library of Alexandria existed?",
   "3": "How did the Pharos lighthouse impact ancient maritime trade?",
   "4": "Tell me about Constantinople.",
 };
 
 marked.use({ mangle: false, headerIds: false });
 
-const BotB = ({ pdfContent, llm, tokenizer, setChatHistory }) => {
+const BotB = ({ pdfContent, llmB, tokenizer, setChatHistory }) => {
   const CHUNK_SIZE = 1000;
 
   const splitIntoChunks = (text, size) => {
@@ -39,14 +38,14 @@ const BotB = ({ pdfContent, llm, tokenizer, setChatHistory }) => {
 
     for (const chunk of chunks) {
       const normalizedChunk = normalizeText(chunk);
-      const prompt = `<|system|>\nYou are an assistant. You are given some content of a pdf/file as following, answer the question/query based on the content.<|end|>\n <|user|>\n ${normalizedChunk}.${query}<|end|>\n<|assistant|>`;
+     const prompt = `<|system|>\nYou are an assistant. You are given some content of a pdf/file as following, answer the question/query based on the content.<|end|>\n <|user|>\n ${normalizedChunk}.${query}<|end|>\n<|assistant|>`;
       const promptText = 'You are an assistant. You are given some content of a pdf/file as following, answer the question/query based on the content.';
-        
+  
       const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
 
-      await llm.initialize_feed();
+      await llmB.initialize_feed();
       try {
-        const output_tokens = await llm.generate(input_ids, null, { max_tokens: 9999 });
+        const output_tokens = await llmB.generate(input_ids, null, { max_tokens: 9999 });
         const responseText = tokenizer.decode(output_tokens, { skip_special_tokens: true });
 
         const promptTextLength = promptText.length;
@@ -67,24 +66,23 @@ const BotB = ({ pdfContent, llm, tokenizer, setChatHistory }) => {
     }
     return results;
   };
-
   return { searchPDF };
 };
 
-const BotC = ({ llm, tokenizer }) => {
+const BotC = ({ llmC, tokenizer }) => {
 
   const respond = async (message) => {
-    let prompt = `<|system|>\nYou are a friendly assistant.<|end|>\n<|user|>\n${message}<|end|>\n<|assistant|>\n`;
+    let prompt = `<|system|>\nYou are a friendly assistant.<|end|>\n<|user|>\n${message}<|end|>\n<|assistant|>`;
 
     const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
 
-    await llm.initialize_feed();
+    await llmC.initialize_feed();
 
     const start_timer = performance.now();
-    const output_index = llm.output_tokens.length + input_ids.length;
+    const output_index = llmC.output_tokens.length + input_ids.length;
 
     try {
-      const output_tokens = await llm.generate(input_ids, (output_tokens) => {
+      const output_tokens = await llmC.generate(input_ids, (output_tokens) => {
         if (output_tokens.length === input_ids.length + 1) {
           const took = (performance.now() - start_timer) / 1000;
           console.log(`time to first token in ${took.toFixed(1)}sec, ${input_ids.length} tokens`);
@@ -95,12 +93,7 @@ const BotC = ({ llm, tokenizer }) => {
       const responseText = tokenizer.decode(output_tokens.slice(output_index), { skip_special_tokens: true });
       const seqlen = output_tokens.length - output_index;
       console.log(`${seqlen} tokens in ${took.toFixed(1)}sec, ${(seqlen / took).toFixed(2)} tokens/sec`);
-      
-      // setChatHistory((prevHistory) => [
-      //   ...prevHistory,
-      //   { type: 'bot', text: marked.parse(responseText.trim()), botType: 'botC' },
-      // ]);
-
+      llmC.clear_buffers();
       return responseText;
     } catch (error) {
       console.error(`Error in LLM.generate: ${error.message}`);
@@ -111,20 +104,17 @@ const BotC = ({ llm, tokenizer }) => {
   return { respond };
 };
 
-const BotA = ({ pdfContent, botB, botC, llm,  tokenizer, setChatHistory }) => {
+const BotA = ({ pdfContent, botB, botC, llmA, tokenizer, setChatHistory }) => {
 
   const respond = async (message) => {
     const isPDFRelated = await analyzeQuery(message);
 
     if (isPDFRelated) {
       if (!pdfContent) {
-        
         return { text: "Please upload a PDF document!", botType: 'botA' };
-        
       }
       const intermediateResults = await botB.searchPDF(message);
-      
-      const finalResult = await generateResponse(intermediateResults.join('\n') , message );
+      const finalResult = await generateResponse(intermediateResults.join('\n') + message + ". In short!");
       return { text: "Confirmed: \n" + finalResult, botType: 'botA' };
     } else {
       const response = await botC.respond(message);
@@ -133,41 +123,36 @@ const BotA = ({ pdfContent, botB, botC, llm,  tokenizer, setChatHistory }) => {
   };
 
   const analyzeQuery = async (message) => {
+   let prompt =  `<|system|>\nYou are a friendly assistant. Does the message ask about a pdf document or something in the file? Answer yes or no.<|end|>\n<|user|>\n${message}<|end|>\n<|assistant|>\n`;
 
-    try{
-      // 定义一个包含所有关键字的正则表达式
-      const keywords = /(pdf|PDF|this pdf|this file|this document|in this pdf|in the file|in this file|in the pdf|in this document|in the document)/i;
-      // 测试消息是否包含关键字
-      return keywords.test(message);
-    // let prompt =  `<|system|>\nYou are an assistant. Does the message ask about a pdf document or some information in the file? Only Answer with yes or no.<|end|>\n<|user|>\n${message}<|end|>\n<|assistant|>\n`;
+   
+    const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
 
-    // const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
+    await llmA.initialize_feed();
 
-    // await llm.initialize_feed();
+    const start_timer = performance.now();
+    const output_index = llmA.output_tokens.length + input_ids.length;
 
-    // const start_timer = performance.now();
-    // const output_index = llm.output_tokens.length + input_ids.length;
+    try {
+      const output_tokens = await llmA.generate(input_ids, (output_tokens) => {
+        if (output_tokens.length === input_ids.length + 1) {
+          const took = (performance.now() - start_timer) / 1000;
+          console.log(`time to first token in ${took.toFixed(1)}sec, ${input_ids.length} tokens`);
+        }
+      }, { max_tokens: 9999 });
 
-    // try {
-    //   const output_tokens = await llm.generate(input_ids, (output_tokens) => {
-    //     if (output_tokens.length === input_ids.length + 1) {
-    //       const took = (performance.now() - start_timer) / 1000;
-    //       console.log(`time to first token in ${took.toFixed(1)}sec, ${input_ids.length} tokens`);
-    //     }
-    //   }, { max_tokens: 9999 });
+      const took = (performance.now() - start_timer) / 1000;
+      const responseText = tokenizer.decode(output_tokens.slice(output_index), { skip_special_tokens: true });
+      const seqlen = output_tokens.length - output_index;
+      console.log(`${seqlen} tokens in ${took.toFixed(1)}sec, ${(seqlen / took).toFixed(2)} tokens/sec`);
 
-    //   const took = (performance.now() - start_timer) / 1000;
-    //   const responseText = tokenizer.decode(output_tokens.slice(output_index), { skip_special_tokens: true });
-    //   const seqlen = output_tokens.length - output_index;
-    //   console.log(`${seqlen} tokens in ${took.toFixed(1)}sec, ${(seqlen / took).toFixed(2)} tokens/sec`);
+      console.log("alpha:", responseText);
+      setChatHistory((prevHistory) => [
+        ...prevHistory,
+        { type: 'bot', text: marked.parse(responseText.trim()), botType: 'botA' },
+      ]);
 
-    //   console.log("alpha:", responseText);
-    //   // setChatHistory((prevHistory) => [
-    //   //   ...prevHistory,
-    //   //   { type: 'bot', text: marked.parse(responseText.trim()), botType: 'botA' },
-    //   // ]);
-
-    //   return responseText.toLowerCase().startsWith('yes');
+      return responseText.toLowerCase().startsWith('yes');
     } catch (error) {
       console.error(`Error in alpha.generate: ${error.message}`);
       throw error;
@@ -175,17 +160,17 @@ const BotA = ({ pdfContent, botB, botC, llm,  tokenizer, setChatHistory }) => {
   };
 
   const generateResponse = async (message) => {
-    let prompt = `<|system|>\nYou are a friendly assistant. Please summarize the following message in very short!<|end|>\n<|user|>\n${message}<|end|>\n<|assistant|>\n`;
+    let prompt = `\nYou are a friendly assistant.\n\n${message}\n`;
 
     const { input_ids } = await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
 
-    await llm.initialize_feed();
+    await llmA.initialize_feed();
 
     const start_timer = performance.now();
-    const output_index = llm.output_tokens.length + input_ids.length;
+    const output_index = llmA.output_tokens.length + input_ids.length;
 
     try {
-      const output_tokens = await llm.generate(input_ids, (output_tokens) => {
+      const output_tokens = await llmA.generate(input_ids, (output_tokens) => {
         if (output_tokens.length === input_ids.length + 1) {
           const took = (performance.now() - start_timer) / 1000;
           console.log(`time to first token in ${took.toFixed(1)}sec, ${input_ids.length} tokens`);
@@ -201,9 +186,6 @@ const BotA = ({ pdfContent, botB, botC, llm,  tokenizer, setChatHistory }) => {
       console.error(`Error in LLM.generate: ${error.message}`);
       throw error;
     }
- 
-
-
   };
 
   return { respond };
@@ -213,8 +195,9 @@ const App = () => {
   const [input, setInput] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
   const [isSending, setIsSending] = useState(false);
-  const [llm, setLLM] = useState(null);
-
+  const [llmA, setLLMA] = useState(null);
+  const [llmB, setLLMB] = useState(null);
+  const [llmC, setLLMC] = useState(null);
   const [tokenizer, setTokenizer] = useState(null);
   const [status, setStatus] = useState('');
   const [pdfContent, setPdfContent] = useState('');
@@ -231,8 +214,6 @@ const App = () => {
     max_tokens: 9999,
     local: 1,
   };
-
-  
 
   const log = (message) => {
     setStatus((prevStatus) => `${prevStatus}\n${message}`);
@@ -252,9 +233,6 @@ const App = () => {
         max_tokens: config.max_tokens,
         hasFP16: hasFP16 === 2,
       });
-
-
-
       log("Ready.");
       if (hasFP16 === 2) {
         console.log("WebGPU supports fp16.");
@@ -271,11 +249,13 @@ const App = () => {
   useEffect(() => {
     async function initialize() {
       try {
-        const llmInstance = new LLM();
+        const llmInstanceA = new LLM();
+        const llmInstanceB = new LLM();
+        const llmInstanceC = new LLM();
 
-
-        setLLM(llmInstance);
-      
+        setLLMA(llmInstanceA);
+        setLLMB(llmInstanceB);
+        setLLMC(llmInstanceC);
 
         log("Loading tokenizer...");
         const tokenizerInstance = await AutoTokenizer.from_pretrained('');
@@ -283,8 +263,9 @@ const App = () => {
         log("Tokenizer loaded successfully.");
 
         const hasFP16 = await checkWebGPU();
-        await Init(llmInstance,hasFP16);
-        
+        await Init(llmInstanceA, hasFP16);
+        await Init(llmInstanceB, hasFP16);
+        await Init(llmInstanceC, hasFP16);
 
       } catch (error) {
         console.error("Failed to initialize:", error);
@@ -313,7 +294,9 @@ const App = () => {
     e.preventDefault();
 
     if (isSending) {
-      llm.abort();
+      llmA.abort();
+      llmB.abort();
+      llmC.abort();
       setIsSending(false);
       return;
     }
@@ -331,9 +314,9 @@ const App = () => {
     setIsSending(true);
 
     try {
-      const botB = BotB({ pdfContent, llm, tokenizer, setChatHistory });
-      const botC = BotC({ llm, tokenizer, setChatHistory });
-      const botA = BotA({ pdfContent, botB, botC, llm, tokenizer, setChatHistory });
+      const botB = BotB({ pdfContent, llmB, tokenizer, setChatHistory });
+      const botC = BotC({ llmC, tokenizer, setChatHistory });
+      const botA = BotA({ pdfContent, botB, botC, llmA, tokenizer, setChatHistory });
       const response = await botA.respond(userMessage);
       setChatHistory((prevHistory) => [
         ...prevHistory,
@@ -417,30 +400,3 @@ const App = () => {
 };
 
 export default App;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
