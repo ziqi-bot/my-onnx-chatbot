@@ -2,9 +2,10 @@
 
 import * as ort from 'onnxruntime-web/webgpu';
 
-ort.env.wasm.numThreads = 1;
+ort.env.wasm.numThreads = navigator.hardwareConcurrency;
 ort.env.wasm.simd = true;
 ort.env.wasm.wasmPaths = `${process.env.PUBLIC_URL}/static/js/`;
+
 
 async function fetchAndCache(url) {
   try {
@@ -104,7 +105,9 @@ export class LLM {
   }
 
   initialize_feed() {
-    
+    console.log("check point");
+  // 检查 crossOriginIsolated 的值
+  
 
 
     for (const name in this.feed) {
