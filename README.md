@@ -1,3 +1,8 @@
+# Phi-3-mini-4k-instruct-onnx-web model link
+
+https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-onnx-web
+
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
